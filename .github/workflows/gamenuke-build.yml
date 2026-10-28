@@ -3,7 +3,7 @@ name: Build Game Nuke APK
 on:
   push:
     paths:
-      - 'build-input/GameNuke-Source.zip.b64'
+      - 'projects/GameNuke/.build-trigger'
   workflow_dispatch:
 
 permissions:
@@ -23,23 +23,16 @@ jobs:
     steps:
       - name: Checkout source repository
         uses: actions/checkout@v4
-      - name: Decode and build
+      - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
           export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
           export PATH="$JAVA_HOME/bin:$PATH"
-          mkdir -p /tmp/gamenuke-source release
-          base64 -d build-input/GameNuke-Source.zip.b64 > /tmp/GameNuke-Source.zip
-          unzip -q /tmp/GameNuke-Source.zip -d /tmp/gamenuke-source
-          ROOT="$(find /tmp/gamenuke-source -name settings.gradle.kts -not -path '*/.gradle/*' -print -quit | xargs -r dirname)"
-          if [ -z "$ROOT" ]; then echo 'settings.gradle.kts not found'; exit 2; fi
-          echo "Project root: $ROOT"
-          java -version
-          gradle --version
-          gradle -p "$ROOT" --no-daemon --stacktrace assembleDebug
-          APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
+          gradle -p projects/GameNuke --no-daemon --stacktrace assembleDebug
+          APK="projects/GameNuke/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
+          mkdir -p release
           cp "$APK" release/GameNuke.apk
           echo "APK_SIZE_BYTES=$(stat -c %s release/GameNuke.apk)"
           sha256sum release/GameNuke.apk
@@ -70,7 +63,7 @@ jobs:
           tag_name: gamenuke-v1.0.0-${{ github.run_number }}
           name: Game Nuke v1.0.0 · Build ${{ github.run_number }}
           body: |
-            Game Nuke — Nuke Engine Omni Booster
+            Game Nuke — Nuke Engine Omni Booster.
 
             Android 10+ debug APK. Shizuku is required for shell-backed tweaks. Kernel controls depend on device support.
             Download GameNuke.apk from this release's Assets section.
