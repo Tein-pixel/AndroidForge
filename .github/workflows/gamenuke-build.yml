@@ -11,7 +11,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: gamenuke-apk-${{ github.ref }}
+  group: gamenuke-apk-${{ github.run_id }}
   cancel-in-progress: true
 
 jobs:
