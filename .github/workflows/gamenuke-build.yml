@@ -12,23 +12,35 @@ permissions:
 
 concurrency:
   group: gamenuke-apk-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Compile Android APK
     runs-on: ubuntu-latest
-    container: ghcr.io/professional-x/androidforge-build-env:latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout source repository
         uses: actions/checkout@v4
-      - name: Build debug APK
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Compile debug APK
         shell: bash
         run: |
           set -euo pipefail
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$PATH"
           gradle -p projects/GameNuke --no-daemon --stacktrace assembleDebug
           APK="projects/GameNuke/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
@@ -64,8 +76,6 @@ jobs:
           name: Game Nuke v1.0.0 · Build ${{ github.run_number }}
           body: |
             Game Nuke — Nuke Engine Omni Booster.
-
             Android 10+ debug APK. Shizuku is required for shell-backed tweaks. Kernel controls depend on device support.
-            Download GameNuke.apk from this release's Assets section.
           files: release/GameNuke.apk
           make_latest: true
