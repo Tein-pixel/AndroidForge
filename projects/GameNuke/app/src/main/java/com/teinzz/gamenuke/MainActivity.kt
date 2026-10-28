@@ -282,6 +282,7 @@ private fun ToggleCard(t: Tweak, prefs: android.content.SharedPreferences, logs:
 
 @Composable
 private fun GamesScreen(games: List<Game>, prefs: android.content.SharedPreferences, logs: MutableList<String>, scope: kotlinx.coroutines.CoroutineScope, notice: (String) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { PanelCard { Text("ESPORTS DASHBOARD", color = GREEN, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp); Spacer(Modifier.height(5.dp)); Text("${games.size} game terdeteksi", color = TXT, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold); Text("Pemindaian kategori game + nama/paket fallback.", color = DIM, fontSize = 11.sp) } }
         if (games.isEmpty()) item { EmptyCard("Belum ada game", "Kategori aplikasi Android menentukan hasil pemindaian.") }
@@ -297,8 +298,28 @@ private fun GamesScreen(games: List<Game>, prefs: android.content.SharedPreferen
                     }
                     Button(onClick = {
                         scope.launch {
-                            val c = "pm trim-caches 128M"; val r = ShellRunner.execute(c); logs.add(logLine(c, r))
-                            val launch = game.pkg.let { (androidx.compose.ui.platform.LocalContext.current.packageManager.getLaunchIntentForPackage(it)) }
+                            val c = "pm trim-caches 128M"
+                            val r = ShellRunner.execute(c)
+                            logs.add(logLine(c, r))
+                            val launchIntent = ctx.packageManager.getLaunchIntentForPackage(game.pkg)
+                            if (launchIntent == null) {
+                                notice("Launcher intent tidak ditemukan untuk ${game.name}.")
+                                return@launch
+                            }
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { ctx.startActivity(launchIntent) }.onFailure {
+                                notice("Gagal membuka game: ${it.message}")
+                                return@launch
+                            }
+                            if (Settings.canDrawOverlays(ctx)) {
+                                runCatching { ctx.startService(Intent(ctx, NukeOverlayService::class.java)) }
+                                    .onFailure { notice("Game dibuka; HUD gagal dimulai.") }
+                            } else {
+                                notice("Game dibuka. Aktifkan izin tampil di atas aplikasi untuk HUD.")
+                                runCatching {
+                                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                }
+                            }
                         }
                     }, colors = ButtonDefaults.buttonColors(containerColor = GREEN, contentColor = BG), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)) { Icon(Icons.Filled.Bolt, null, Modifier.size(15.dp)); Text(" BOOST", fontSize = 10.sp, fontWeight = FontWeight.Bold) }
                 }
