@@ -21,6 +21,9 @@ name: Build Android APK
 #  11. On failure, run automated diagnosis
 
 on:
+  push:
+    paths:
+      - "input/TeinPerformanceManager.zip.b64.*"
   workflow_dispatch:
     inputs:
       zip_source:
@@ -132,6 +135,12 @@ jobs:
       # ---------------------------------------------------------------------
       # Step 1: Acquire ZIP
       # ---------------------------------------------------------------------
+      - name: Assemble Tein Performance source ZIP
+        if: github.event_name == 'push'
+        run: |
+          cat input/TeinPerformanceManager.zip.b64.* | base64 -d > input/TeinPerformanceManager.zip
+          unzip -t input/TeinPerformanceManager.zip
+
       - name: Acquire source ZIP
         id: acquire
         run: |
@@ -139,7 +148,7 @@ jobs:
             --source "${{ inputs.zip_source || 'input-directory' }}" \
             --url "${{ inputs.zip_url }}" \
             --tag "${{ inputs.release_tag }}" \
-            --path "${{ inputs.zip_path }}"
+            --path "${{ inputs.zip_path || 'input/TeinPerformanceManager.zip' }}"
 
       # ---------------------------------------------------------------------
       # Step 2: Extract ZIP
