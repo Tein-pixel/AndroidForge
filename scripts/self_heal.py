@@ -326,15 +326,17 @@ def heal_android_namespace(root: Path, fixes: list[dict], warnings: list[dict]) 
         source = read_file(gradle_file)
         if not source:
             continue
-        if re.search(r"(?m)^\\s*namespace\\s*(?:=\\s*)?['\\\"]", source):
+        if re.search(r"(?m)^ *namespace *(?:= *)?['\\\"]", source):
             return
-        appid_match = re.search(r"applicationId\\s*(?:=\\s*)?['\\\"]([^'\\\"]+)['\\\"]", source)
+        appid_match = re.search(r'applicationId *= *"([^"]+)"', source)
+        if not appid_match:
+            appid_match = re.search(r"applicationId *= *'([^']+)'", source)
         if not appid_match:
             continue
         namespace = appid_match.group(1).strip()
         if not namespace:
             continue
-        android_block = re.search(r"(?m)^(\\s*)android\\s*\\{", source)
+        android_block = re.search(r"(?m)^( *)android *[{]", source)
         if not android_block:
             warnings.append({
                 "kind": "missing_android_block",
@@ -345,7 +347,7 @@ def heal_android_namespace(root: Path, fixes: list[dict], warnings: list[dict]) 
         indent = android_block.group(1) + "    "
         declaration = f'{indent}namespace = "{namespace}"' if gradle_file.name.endswith(".kts") else f'{indent}namespace "{namespace}"'
         pos = android_block.end()
-        gradle_file.write_text(source[:pos] + "\\n" + declaration + source[pos:], encoding="utf-8")
+        gradle_file.write_text(source[:pos] + chr(10) + declaration + source[pos:], encoding="utf-8")
         fixes.append({
             "name": "add_android_namespace",
             "action": f'added namespace "{namespace}" to {gradle_file.relative_to(root)}',
