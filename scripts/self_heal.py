@@ -328,9 +328,9 @@ def heal_android_namespace(root: Path, fixes: list[dict], warnings: list[dict]) 
             continue
         if re.search(r"(?m)^ *namespace *(?:= *)?['\\\"]", source):
             return
-        appid_match = re.search(r'applicationId *= *"([^"]+)"', source)
+        appid_match = re.search(r'applicationId *(?:= *)?"([^"]+)"', source)
         if not appid_match:
-            appid_match = re.search(r"applicationId *= *'([^']+)'", source)
+            appid_match = re.search(r"applicationId *(?:= *)?'([^']+)'", source)
         if not appid_match:
             continue
         namespace = appid_match.group(1).strip()
