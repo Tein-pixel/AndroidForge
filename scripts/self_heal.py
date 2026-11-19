@@ -314,54 +314,50 @@ def detect_repositories_mode_conflict(root: Path, warnings: list[dict]) -> None:
             break  # one warning per file is enough
 
 
-def heal_android_manifest_package(root: Path, fixes: list[dict], warnings: list[dict]) -> None:
-    """For very old projects that don't have `namespace` in build.gradle
-    and have an AndroidManifest.xml without a `package` attribute, add one
-    based on the applicationId.
-    """
-    # Find AndroidManifest.xml
-    manifests = list(root.rglob("AndroidManifest.xml"))
-    if not manifests:
-        return
+def heal_android_namespace(root: Path, fixes: list[dict], warnings: list[dict]) -> None:
+    """Add AGP 8+ namespace to the Android Gradle DSL, never to the manifest."""
+    candidates = [root / "app" / "build.gradle", root / "app" / "build.gradle.kts"]
+    if not any(p.exists() for p in candidates):
+        candidates = sorted(p for p in root.glob("*/build.gradle*") if p.name in {"build.gradle", "build.gradle.kts"})
 
-    # Find applicationId from app/build.gradle(.kts)
-    app_gradle = None
-    for cand in [root / "app" / "build.gradle", root / "app" / "build.gradle.kts"]:
-        if cand.exists():
-            app_gradle = read_file(cand)
-            break
-    if not app_gradle:
-        return
-
-    # Look for namespace= first (modern AGP)
-    ns_match = re.search(r'namespace\s*=\s*["\']([^"\']+)["\']', app_gradle)
-    if ns_match:
-        return  # namespace is set, no need to patch manifest
-
-    # Look for applicationId
-    appid_match = re.search(r'applicationId\s*["\']?\s*=?\s*["\']([^"\']+)["\']', app_gradle)
-    if not appid_match:
-        return
-    application_id = appid_match.group(1)
-
-    for manifest in manifests:
-        content = read_file(manifest)
-        if "package=" in content or 'package =' in content:
-            continue  # already has package attribute
-        # Insert package attribute into the <manifest> opening tag
-        new_content = re.sub(
-            r"(<manifest[^>]*?)(/?>)",
-            rf'\1 package="{application_id}"\2',
-            content,
-            count=1,
-        )
-        if new_content != content:
-            manifest.write_text(new_content)
-            fixes.append({
-                "name": "add_manifest_package",
-                "action": f"added package=\"{application_id}\" to {manifest.relative_to(root) if manifest.is_relative_to(root) else manifest}",
-                "reason": "build.gradle has no `namespace` and AndroidManifest.xml had no `package` attribute — added one based on applicationId.",
+    for gradle_file in candidates:
+        if not gradle_file.exists():
+            continue
+        source = read_file(gradle_file)
+        if not source:
+            continue
+        if re.search(r"(?m)^\\s*namespace\\s*(?:=\\s*)?['\\\"]", source):
+            return
+        appid_match = re.search(r"applicationId\\s*(?:=\\s*)?['\\\"]([^'\\\"]+)['\\\"]", source)
+        if not appid_match:
+            continue
+        namespace = appid_match.group(1).strip()
+        if not namespace:
+            continue
+        android_block = re.search(r"(?m)^(\\s*)android\\s*\\{", source)
+        if not android_block:
+            warnings.append({
+                "kind": "missing_android_block",
+                "file": str(gradle_file.relative_to(root)),
+                "hint": "Found applicationId but no android { } block; namespace was not injected.",
             })
+            continue
+        indent = android_block.group(1) + "    "
+        declaration = f'{indent}namespace = "{namespace}"' if gradle_file.name.endswith(".kts") else f'{indent}namespace "{namespace}"'
+        pos = android_block.end()
+        gradle_file.write_text(source[:pos] + "\\n" + declaration + source[pos:], encoding="utf-8")
+        fixes.append({
+            "name": "add_android_namespace",
+            "action": f'added namespace "{namespace}" to {gradle_file.relative_to(root)}',
+            "reason": "AGP 8+ requires namespace in the Android Gradle DSL; source AndroidManifest.xml remains unchanged.",
+        })
+        return
+
+    if (root / "app").is_dir():
+        warnings.append({
+            "kind": "namespace_not_added",
+            "hint": "Could not safely locate an app Gradle file with applicationId; no manifest mutation was performed.",
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +403,7 @@ def main() -> int:
     heal_missing_local_properties(root, args.android_sdk, fixes)
 
     # 4. AndroidManifest package attribute (for old projects)
-    heal_android_manifest_package(root, fixes, warnings)
+    heal_android_namespace(root, fixes, warnings)
 
     # 5. Detect duplicate top-level classes (warn-only, do NOT auto-delete)
     detect_duplicate_classes(root, warnings)
