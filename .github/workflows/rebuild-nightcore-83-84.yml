@@ -1,0 +1,169 @@
+name: Rebuild NightcoreFloating #83 and #84
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/rebuild-nightcore-83-84.yml"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: nightcore-floating-rebuild
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    container: ghcr.io/professional-x/androidforge-build-env:latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "Version 1 (original #83)"
+            zip_path: "input/web-build-1794980777317-NightcoreFloating.zip"
+            artifact_name: "NightcoreFloating-v1-APK"
+          - label: "Version 2 (#84)"
+            zip_path: "input/web-build-1794980819607-NightcoreFloating_v2.zip"
+            artifact_name: "NightcoreFloating-v2-APK"
+    env:
+      ANDROID_HOME: /opt/android-sdk
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.caching=false"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip --quiet
+          python3 -m pip install -r scripts/requirements.txt --quiet
+
+      - name: Acquire exact source ZIP
+        run: |
+          python3 scripts/acquire_zip.py \
+            --source "input-directory" \
+            --path "${{ matrix.zip_path }}"
+
+      - name: Extract source ZIP
+        id: extract
+        run: python3 scripts/extract_zip.py --zip ".androidforge/downloads/$(basename "${{ matrix.zip_path }}")"
+
+      - name: Detect project type
+        id: detect
+        run: |
+          python3 scripts/detect_project.py \
+            --root "${{ steps.extract.outputs.project_root }}" \
+            --output detection.json
+          cat detection.json
+
+      - name: Configure toolchain
+        id: toolchain
+        run: |
+          python3 scripts/setup_environment.py \
+            --root "${{ steps.extract.outputs.project_root }}" \
+            --detect detection.json \
+            --android-sdk "$ANDROID_HOME" \
+            --output toolchain.json
+          cat toolchain.json
+
+      - name: Self-heal project (current fixed logic)
+        run: |
+          python3 scripts/self_heal.py \
+            --root "${{ steps.extract.outputs.project_root }}" \
+            --detect detection.json \
+            --toolchain toolchain.json \
+            --android-sdk "$ANDROID_HOME" \
+            --output self_heal.json
+          cat self_heal.json
+
+      - name: Switch JAVA_HOME to detected version
+        run: |
+          JDK_VER="${{ steps.toolchain.outputs.jdk_version }}"
+          case "$JDK_VER" in
+            8)  NEW_JH=/usr/lib/jvm/java-8-openjdk-amd64 ;;
+            11) NEW_JH=/usr/lib/jvm/java-11-openjdk-amd64 ;;
+            17|21) NEW_JH=/usr/lib/jvm/java-17-openjdk-amd64 ;;
+            *) NEW_JH=/usr/lib/jvm/java-17-openjdk-amd64 ;;
+          esac
+          echo "JAVA_HOME=$NEW_JH" >> "$GITHUB_ENV"
+          echo "$NEW_JH/bin" >> "$GITHUB_PATH"
+          java -version
+
+      - name: Install missing Android SDK components
+        run: |
+          COMPILE_SDK=$(python3 -c "import json; d=json.load(open('detection.json')); v=d.get('versions',{}).get('compile_sdk'); print(v if v else '')")
+          if [ -n "$COMPILE_SDK" ] && [ ! -d "$ANDROID_HOME/platforms/android-$COMPILE_SDK" ]; then
+            yes | sdkmanager "platforms;android-$COMPILE_SDK"
+          fi
+          yes | sdkmanager "platform-tools" >/dev/null 2>&1 || true
+          yes | sdkmanager "build-tools;34.0.0" >/dev/null 2>&1 || true
+
+      - name: Restore Gradle cache
+        if: steps.toolchain.outputs.needs_gradle == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            /root/.gradle/caches
+            /root/.gradle/wrapper
+            ${{ steps.extract.outputs.project_root }}/.gradle
+          key: nightcore-gradle-${{ steps.toolchain.outputs.gradle_version }}-${{ hashFiles('**/build.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            nightcore-gradle-${{ steps.toolchain.outputs.gradle_version }}-
+            nightcore-gradle-
+
+      - name: Build debug APK
+        id: build
+        run: |
+          python3 scripts/build_project.py \
+            --root "${{ steps.extract.outputs.project_root }}" \
+            --detect "$GITHUB_WORKSPACE/detection.json" \
+            --toolchain "$GITHUB_WORKSPACE/toolchain.json" \
+            --variant "debug" \
+            --log-dir "$GITHUB_WORKSPACE/.androidforge/nightcore-logs" \
+            --output "$GITHUB_WORKSPACE/nightcore-build.json"
+          cat "$GITHUB_WORKSPACE/nightcore-build.json"
+
+      - name: Collect APK
+        id: collect
+        if: always()
+        run: |
+          python3 scripts/collect_apk.py \
+            --root "${{ steps.extract.outputs.project_root }}" \
+            --variant "debug" \
+            --output-dir "$GITHUB_WORKSPACE/output" \
+            --output-json "$GITHUB_WORKSPACE/collect.json" || true
+          cat "$GITHUB_WORKSPACE/collect.json"
+
+      - name: Upload APK artifact
+        if: steps.collect.outputs.apk_count != '0' && steps.collect.outputs.apk_count != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ steps.collect.outputs.apk_directory }}/*.apk
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-diagnostics
+          path: |
+            .androidforge/nightcore-logs/
+            self_heal.json
+            detection.json
+            toolchain.json
+            nightcore-build.json
+            collect.json
+          if-no-files-found: ignore
+          retention-days: 14
